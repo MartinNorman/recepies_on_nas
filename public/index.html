@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recipe Search - Find Recipes by Ingredients</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-utensils"></i> Recipe Search</h1>
+            <p>Discover delicious recipes using ingredients you have on hand</p>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="nav-tabs">
+            <div class="nav-tabs-left">
+                <button class="nav-tab active" data-tab="search">
+                    <i class="fas fa-search"></i> Search Recipes
+                </button>
+                <button class="nav-tab" data-tab="menu">
+                    <i class="fas fa-calendar-week"></i> Weekly Menu
+                </button>
+            </div>
+            <button id="addRecipeBtn" class="btn btn-primary btn-add-recipe">
+                <i class="fas fa-plus"></i> Add New Recipe
+            </button>
+        </nav>
+
+        <main class="main-content">
+            <!-- Search Section -->
+            <section class="search-section">
+                <div class="search-container">
+                    <h2><i class="fas fa-search"></i> Search by Ingredients</h2>
+                    
+                    <!-- Ingredient Input -->
+                    <div class="ingredient-input-container">
+                        <div class="ingredient-input-wrapper">
+                            <input 
+                                type="text" 
+                                id="ingredientInput" 
+                                placeholder="Type an ingredient name..."
+                                autocomplete="off"
+                            >
+                            <button id="addIngredientBtn" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
+                        
+                        <!-- Suggestions Dropdown -->
+                        <div id="suggestions" class="suggestions-dropdown"></div>
+                    </div>
+
+                    <!-- Added Ingredients Display -->
+                    <div class="ingredients-display">
+                        <div id="addedIngredients" class="added-ingredients"></div>
+                    </div>
+
+                    <!-- Search Controls -->
+                    <div class="search-controls">
+                        <div class="search-options">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="matchAllCheckbox">
+                                <span class="checkmark"></span>
+                                Match all ingredients (recipes must contain all selected ingredients)
+                            </label>
+                        </div>
+                        
+                        <button id="searchBtn" class="btn btn-search">
+                            <i class="fas fa-search"></i> Search Recipes
+                        </button>
+                        
+                        <button id="clearBtn" class="btn btn-secondary">
+                            <i class="fas fa-times"></i> Clear All
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <h2 id="resultsTitle"></h2>
+                <div id="searchResults" class="results-grid"></div>
+            </section>
+
+            <!-- Quick Search Section -->
+            <section class="quick-search-section">
+                <h2><i class="fas fa-fire"></i> Quick Search</h2>
+                <div class="quick-search-controls">
+                    <input 
+                        type="text" 
+                        id="quickSearchInput" 
+                        placeholder="Search recipes by name or description..."
+                    >
+                    <button id="quickSearchBtn" class="btn btn-primary">
+                        <i class="fas fa-search"></i> Search
+                    </button>
+                </div>
+            </section>
+
+            <!-- Browse Recipes Section -->
+            <section class="browse-section">
+                <h2><i class="fas fa-book-open"></i> Browse All Recipes</h2>
+                <div class="browse-controls">
+                    <button id="browseBtn" class="btn btn-primary">
+                        <i class="fas fa-list"></i> View All Recipes
+                    </button>
+                    <button id="filterKottBtn" class="btn btn-secondary type-filter-btn" data-type="Kött">
+                        <i class="fas fa-filter"></i> Kött
+                    </button>
+                    <button id="filterFiskBtn" class="btn btn-secondary type-filter-btn" data-type="Fisk">
+                        <i class="fas fa-filter"></i> Fisk
+                    </button>
+                    <button id="filterFagelBtn" class="btn btn-secondary type-filter-btn" data-type="Fågel">
+                        <i class="fas fa-filter"></i> Fågel
+                    </button>
+                    <div id="typeFilterButtons" class="type-filter-buttons"></div>
+                </div>
+                <div id="browseResults" class="results-grid"></div>
+            </section>
+        </main>
+
+        <!-- Recipe Detail Modal -->
+        <div id="recipeModal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <div id="recipeDetail"></div>
+            </div>
+        </div>
+
+        <!-- Recipe Edit Modal -->
+        <div id="recipeEditModal" class="modal">
+            <div class="modal-content modal-large">
+                <span class="close" id="closeEditModal">&times;</span>
+                <h2 id="recipeEditTitle">Add New Recipe</h2>
+                <form id="recipeEditForm">
+                    <input type="hidden" id="recipeId" name="recipeId">
+                    
+                    <div class="form-group">
+                        <label for="recipeName">Recipe Name</label>
+                        <input type="text" id="recipeName" name="name">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Type</label>
+                        <div id="recipeTypeRadioGroup" class="radio-group"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="recipeDescription">Description</label>
+                        <textarea id="recipeDescription" name="description" rows="3" placeholder="Brief description of the recipe"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="recipeImage">Photo</label>
+                        <input type="file" id="recipeImage" name="image" accept="image/*" capture="environment">
+                        <small class="form-help">You can take a photo with your phone or upload an existing image</small>
+                        <div id="imagePreview" class="image-preview"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Cooking Time</label>
+                        <div class="form-row">
+                            <input type="number" id="cookingTime" name="cookingTime" min="0" placeholder="Time">
+                            <select id="cookingTimeUnit" name="cookingTimeUnit">
+                                <option value="">Unit</option>
+                                <option value="minutes">Minutes</option>
+                                <option value="hours">Hours</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="recipeRating">Rating (0-5)</label>
+                        <input type="number" id="recipeRating" name="rating" min="0" max="5" step="0.1" placeholder="e.g., 4.5">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Ingredients</label>
+                        <div id="ingredientsList" class="ingredients-edit-list"></div>
+                        <button type="button" id="addIngredientBtnForm" class="btn btn-secondary btn-small">
+                            <i class="fas fa-plus"></i> Add Ingredient
+                        </button>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Instructions</label>
+                        <div id="instructionsList" class="instructions-edit-list"></div>
+                        <button type="button" id="addInstructionBtnForm" class="btn btn-secondary btn-small">
+                            <i class="fas fa-plus"></i> Add Instruction Step
+                        </button>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Save Recipe
+                        </button>
+                        <button type="button" id="deleteRecipeBtn" class="btn btn-danger" style="display: none;">
+                            <i class="fas fa-trash"></i> Delete Recipe
+                        </button>
+                        <button type="button" id="cancelRecipeBtn" class="btn btn-secondary">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loadingSpinner" class="loading-spinner" style="display: none;">
+            <div class="spinner"></div>
+            <p>Searching recipes...</p>
+        </div>
+
+        <!-- Weekly Menu Planner Section -->
+        <section class="menu-section" id="menuSection" style="display: none;">
+            <div class="section-header">
+                <h2><i class="fas fa-calendar-week"></i> Weekly Menu Planner</h2>
+                <div class="menu-controls">
+                    <button id="createMenuBtn" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Create New Menu
+                    </button>
+                    <button id="generateShoppingListBtn" class="btn btn-secondary" style="display: none;">
+                        <i class="fas fa-shopping-cart"></i> Generate Shopping List
+                    </button>
+                </div>
+            </div>
+            
+            <div class="menu-content">
+                <div class="menu-form" id="menuForm" style="display: none;">
+                    <h3>Create Weekly Menu</h3>
+                    <div class="form-group">
+                        <label for="menuName">Menu Name:</label>
+                        <input type="text" id="menuName" placeholder="e.g., Week of March 15">
+                    </div>
+                    <div class="form-group">
+                        <label for="weekStartDate">Week Start Date:</label>
+                        <input type="date" id="weekStartDate">
+                    </div>
+                    <div class="form-group">
+                        <label for="weekEndDate">Week End Date:</label>
+                        <input type="date" id="weekEndDate">
+                    </div>
+                    <div class="form-actions">
+                        <button id="saveMenuBtn" class="btn btn-primary">Create Menu</button>
+                        <button id="cancelMenuBtn" class="btn btn-secondary">Cancel</button>
+                    </div>
+                </div>
+                
+                <div class="menu-grid" id="menuGrid" style="display: none;">
+                    <div class="menu-header">
+                        <div class="menu-selector">
+                            <label for="menuSelect">Select Week:</label>
+                            <select id="menuSelect" class="menu-dropdown">
+                                <option value="">Loading menus...</option>
+                            </select>
+                        </div>
+                        <h3 id="currentMenuName">Weekly Menu</h3>
+                        <div class="menu-actions">
+                            <button id="generateShoppingListBtn" class="btn btn-primary" style="display: none;">
+                                <i class="fas fa-shopping-cart"></i> Generate Shopping List
+                            </button>
+                            <button id="setActiveBtn" class="btn btn-small btn-success" style="display: none;">
+                                <i class="fas fa-star"></i> Set as Active
+                            </button>
+                            <button id="editMenuBtn" class="btn btn-small">
+                                <i class="fas fa-edit"></i> Edit
+                            </button>
+                            <button id="deleteMenuBtn" class="btn btn-small btn-danger">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                    <div class="week-grid">
+                        <div class="day-column" data-day="0">
+                            <h4>Sunday</h4>
+                            <div class="day-content" id="day-0"></div>
+                        </div>
+                        <div class="day-column" data-day="1">
+                            <h4>Monday</h4>
+                            <div class="day-content" id="day-1"></div>
+                        </div>
+                        <div class="day-column" data-day="2">
+                            <h4>Tuesday</h4>
+                            <div class="day-content" id="day-2"></div>
+                        </div>
+                        <div class="day-column" data-day="3">
+                            <h4>Wednesday</h4>
+                            <div class="day-content" id="day-3"></div>
+                        </div>
+                        <div class="day-column" data-day="4">
+                            <h4>Thursday</h4>
+                            <div class="day-content" id="day-4"></div>
+                        </div>
+                        <div class="day-column" data-day="5">
+                            <h4>Friday</h4>
+                            <div class="day-content" id="day-5"></div>
+                        </div>
+                        <div class="day-column" data-day="6">
+                            <h4>Saturday</h4>
+                            <div class="day-content" id="day-6"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Shopping List Modal -->
+        <div id="shoppingListModal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <div id="shoppingListContent"></div>
+            </div>
+        </div>
+
+        <!-- Notification -->
+        <div id="notification" class="notification"></div>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="menu-planner.js"></script>
+</body>
+</html>

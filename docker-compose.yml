@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: recept-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: recepie_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-MNOmno001}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Recipe Application
+  app:
+    build: .
+    container_name: recept-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: recepie_db
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-MNOmno001}
+      # Server settings
+      PORT: 3000
+      # Home Assistant integration
+      HA_BASE_URL: ${HA_BASE_URL:-}
+      HA_TOKEN: ${HA_TOKEN:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist any uploaded files or logs
+      - app_logs:/app/logs
+
+volumes:
+  postgres_data:
+    driver: local
+  app_logs:
+    driver: local

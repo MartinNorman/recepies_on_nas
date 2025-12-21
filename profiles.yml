@@ -1,0 +1,29 @@
+recipe_search_app:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST', 'localhost') }}"
+      user: "{{ env_var('DB_USER', 'your_username') }}"
+      password: "{{ env_var('DB_PASSWORD', 'your_password') }}"
+      port: "{{ env_var('DB_PORT', '5432') }}"
+      dbname: "{{ env_var('DB_NAME', 'recipe_db') }}"
+      schema: public
+      threads: 4
+      keepalives_idle: 0
+      connect_timeout: 10
+      retries: 1
+    
+    prod:
+      type: postgres
+      host: "{{ env_var('DB_HOST_PROD', 'localhost') }}"
+      user: "{{ env_var('DB_USER_PROD', 'your_username') }}"
+      password: "{{ env_var('DB_PASSWORD_PROD', 'your_password') }}"
+      port: "{{ env_var('DB_PORT_PROD', '5432') }}"
+      dbname: "{{ env_var('DB_NAME_PROD', 'recipe_db') }}"
+      schema: public
+      threads: 8
+      keepalives_idle: 0
+      connect_timeout: 10
+      retries: 1
+

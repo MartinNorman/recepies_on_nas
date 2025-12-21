@@ -1,0 +1,41 @@
+name: 'recipe_search_app'
+version: '1.0.0'
+config-version: 2
+
+# The profile directory name
+profile: 'recipe_search_app'
+
+# The database name where dbt will build models
+database: 'recipe_db'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+profile:
+  'recipe_search_app':
+    outputs:
+      dev:
+        type: postgres
+        host: "{{ env_var('DB_HOST', 'localhost') }}"
+        user: "{{ env_var('DB_USER', 'your_username') }}"
+        password: "{{ env_var('DB_PASSWORD', 'your_password') }}"
+        port: "{{ env_var('DB_PORT', '5432') }}"
+        dbname: "{{ env_var('DB_NAME', 'recipe_db') }}"
+        schema: public
+        threads: 4
+        keepalives_idle: 0
+        connect_timeout: 10
+        retries: 1
+    target: dev
+
+vars:
+  start_date: '2024-01-01'
+  end_date: '2024-12-31'
+
