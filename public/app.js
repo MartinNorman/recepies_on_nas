@@ -14,6 +14,7 @@ const searchBtn = document.getElementById('searchBtn');
 const clearBtn = document.getElementById('clearBtn');
 const quickSearchInput = document.getElementById('quickSearchInput');
 const quickSearchBtn = document.getElementById('quickSearchBtn');
+const clearQuickSearchBtn = document.getElementById('clearQuickSearchBtn');
 const browseBtn = document.getElementById('browseBtn');
 const typeFilterButtons = document.getElementById('typeFilterButtons');
 const resultsSection = document.getElementById('resultsSection');
@@ -51,6 +52,9 @@ class RecipeSearchApp {
         quickSearchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.quickSearch();
         });
+        if (clearQuickSearchBtn) {
+            clearQuickSearchBtn.addEventListener('click', this.clearQuickSearch.bind(this));
+        }
         
         // Browse events
         browseBtn.addEventListener('click', this.browseRecipes.bind(this));
@@ -319,31 +323,72 @@ class RecipeSearchApp {
             return;
         }
 
+        // Clear quick search results when doing ingredient search
+        this.clearQuickSearchResults();
+
         this.showLoading(true);
         
         try {
             const matchAll = matchAllCheckbox.checked;
-            const response = await fetch('/api/search/by-ingredients', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    ingredients: addedIngredients,
-                    matchAll
-                })
-            });
+            const requestBody = {
+                ingredients: addedIngredients,
+                matchAll
+            };
+            
+            console.log('Sending search request:', requestBody);
+            
+            // Create AbortController for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+            
+            try {
+                const response = await fetch('/api/search/by-ingredients', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
 
-           if (!response.ok) throw new Error('Search failed');
+                if (!response.ok) {
+                    let errorMessage = 'Search failed';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.details || errorData.error || errorMessage;
+                    } catch (e) {
+                        errorMessage = `Search failed: ${response.status} ${response.statusText}`;
+                    }
+                    throw new Error(errorMessage);
+                }
 
-            const data = await response.json();
-            this.displaySearchResults(data.results, data.query);
-            resultsSection.style.display = 'block';
-            resultsSection.scrollIntoView({ behavior: 'smooth' });
+                const data = await response.json();
+                console.log('Search response received:', data);
+                this.displaySearchResults(data.results, data.query);
+                resultsSection.style.display = 'block';
+                resultsSection.scrollIntoView({ behavior: 'smooth' });
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    throw new Error('Request timed out. The server may be slow or unresponsive.');
+                }
+                throw fetchError;
+            }
             
         } catch (error) {
             console.error('Search error:', error);
-            this.showNotification('Search failed. Please try again.', 'error');
+            let errorMessage = 'Search failed. Please try again.';
+            
+            if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                errorMessage = 'Cannot connect to server. Please check if the server is running.';
+            } else if (error.message) {
+                console.error('Error details:', error.message);
+                errorMessage = `Search failed: ${error.message}`;
+            }
+            
+            this.showNotification(errorMessage, 'error');
         } finally {
             this.showLoading(false);
         }
@@ -403,6 +448,9 @@ class RecipeSearchApp {
     }
 
     displayQuickSearchresults(recipes, query) {
+        // Hide ingredient search results when showing quick search results
+        resultsSection.style.display = 'none';
+        
         // Remove results-grid class to allow proper layout
         browseResults.classList.remove('results-grid');
         browseResults.innerHTML = `
@@ -412,6 +460,16 @@ class RecipeSearchApp {
             </div>
         `;
         this.bindRecipeCardEvents();
+    }
+
+    clearQuickSearch() {
+        quickSearchInput.value = '';
+        this.clearQuickSearchResults();
+    }
+
+    clearQuickSearchResults() {
+        browseResults.innerHTML = '';
+        browseResults.classList.remove('results-grid');
     }
 
     setFilterButtonActive(activeButton) {
@@ -1091,7 +1149,14 @@ class RecipeSearchApp {
             this.loadRecipeForEditing(recipeId);
         } else {
             recipeEditTitle.textContent = 'Add New Recipe';
-            recipeIdInput.value = '';
+            // Explicitly clear recipeId input to ensure it's empty for new recipes
+            // This is critical to prevent accidentally updating an existing recipe
+            if (recipeIdInput) {
+                recipeIdInput.value = '';
+                recipeIdInput.removeAttribute('value');
+                // Force a re-render by temporarily hiding/showing (if needed)
+                console.log('Cleared recipeId input for new recipe. Value is now:', recipeIdInput.value);
+            }
             recipeName.value = '';
             recipeDescription.value = '';
             cookingTime.value = '';
@@ -1175,6 +1240,12 @@ class RecipeSearchApp {
 
     closeRecipeEditor() {
         const recipeEditModal = document.getElementById('recipeEditModal');
+        const recipeIdInput = document.getElementById('recipeId');
+        // Clear the recipeId input when closing the editor to prevent stale values
+        if (recipeIdInput) {
+            recipeIdInput.value = '';
+            recipeIdInput.removeAttribute('value');
+        }
         recipeEditModal.style.display = 'none';
     }
 
@@ -1243,7 +1314,14 @@ class RecipeSearchApp {
     async handleRecipeSubmit(e) {
         e.preventDefault();
         
-        const recipeId = document.getElementById('recipeId').value;
+        // Get recipeId and ensure it's properly cleared if empty
+        const recipeIdInput = document.getElementById('recipeId');
+        let recipeId = recipeIdInput ? recipeIdInput.value : '';
+        // Trim and validate - if it's empty string or just whitespace, treat as empty
+        recipeId = recipeId ? recipeId.toString().trim() : '';
+        
+        console.log('Form submission - raw recipeId value:', recipeIdInput ? recipeIdInput.value : 'null', 'after trim:', recipeId);
+        
         const formData = new FormData(e.target);
         const recipeImage = document.getElementById('recipeImage');
         
@@ -1318,9 +1396,17 @@ class RecipeSearchApp {
         try {
             let savedRecipe;
             
-            if (recipeId) {
+            // Check if recipeId exists and is a valid positive number (not empty string or whitespace)
+            const recipeIdTrimmed = recipeId ? recipeId.toString().trim() : '';
+            const parsedId = parseInt(recipeIdTrimmed);
+            const isUpdate = recipeIdTrimmed !== '' && !isNaN(parsedId) && parsedId > 0;
+            
+            console.log('Recipe submission - recipeId:', recipeId, 'trimmed:', recipeIdTrimmed, 'parsedId:', parsedId, 'isUpdate:', isUpdate);
+            
+            if (isUpdate) {
                 // Update existing recipe
-                const response = await fetch(`/api/tables/names/${recipeId}`, {
+                console.log('Updating existing recipe with ID:', recipeIdTrimmed);
+                const response = await fetch(`/api/tables/names/${recipeIdTrimmed}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1374,7 +1460,7 @@ class RecipeSearchApp {
             
             // Small delay to ensure modal is closed before showing notification
             setTimeout(() => {
-                this.showNotification(recipeId ? 'Recipe updated successfully!' : 'Recipe created successfully!', 'success');
+                this.showNotification(isUpdate ? 'Recipe updated successfully!' : 'Recipe created successfully!', 'success');
             }, 100);
             
             // Refresh recipe list

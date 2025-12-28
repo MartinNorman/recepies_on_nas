@@ -536,7 +536,14 @@ class MenuPlanner {
             const itemActions = item.querySelector('.item-actions');
             const editForm = item.querySelector('.edit-form');
             
-            ingredientInfo.querySelector('.ingredient-name').textContent = newName;
+            // Update the displayed name with the new value
+            const nameElement = ingredientInfo.querySelector('.ingredient-name');
+            if (nameElement) {
+                nameElement.textContent = newName;
+                // Force a reflow to ensure the DOM is updated
+                nameElement.offsetHeight;
+            }
+            
             ingredientInfo.style.display = 'block';
             itemActions.style.display = 'block';
             editForm.remove();
@@ -655,9 +662,20 @@ class MenuPlanner {
                 const checkbox = item.querySelector('input[type="checkbox"]');
                 // Only sync unchecked (unpurchased) items
                 if (!checkbox.checked) {
-                    const nameElement = item.querySelector('.ingredient-name');
-                    if (nameElement) {
-                        displayedItems.push(nameElement.textContent.trim());
+                    // Check if item is currently being edited - read from edit input if so
+                    const editInput = item.querySelector('.edit-input');
+                    if (editInput) {
+                        // Item is being edited - use the value from the edit input
+                        const editedValue = editInput.value.trim();
+                        if (editedValue) {
+                            displayedItems.push(editedValue);
+                        }
+                    } else {
+                        // Item is not being edited - read from the displayed name
+                        const nameElement = item.querySelector('.ingredient-name');
+                        if (nameElement) {
+                            displayedItems.push(nameElement.textContent.trim());
+                        }
                     }
                 }
             });

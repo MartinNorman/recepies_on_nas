@@ -7,6 +7,22 @@ const db = new DatabaseService();
 // POST /api/search/by-ingredients - Search recipes by ingredients
 router.post('/by-ingredients', async (req, res) => {
   try {
+    console.log('Received search request:', {
+      method: req.method,
+      path: req.path,
+      body: req.body,
+      contentType: req.get('Content-Type')
+    });
+
+    // Validate request body exists
+    if (!req.body) {
+      console.error('Request body is missing');
+      return res.status(400).json({ 
+        error: 'Request body is required',
+        details: 'No request body received'
+      });
+    }
+
     const { ingredients, matchAll = false } = req.body;
     
     if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
@@ -17,7 +33,12 @@ router.post('/by-ingredients', async (req, res) => {
 
     // Normalize ingredient names (trim whitespace, lowercase)
     const normalizedIngredients = ingredients
-      .map(ing => ing.trim().toLowerCase())
+      .map(ing => {
+        if (typeof ing !== 'string') {
+          return String(ing).trim().toLowerCase();
+        }
+        return ing.trim().toLowerCase();
+      })
       .filter(ing => ing.length > 0);
 
     if (normalizedIngredients.length === 0) {
@@ -27,6 +48,16 @@ router.post('/by-ingredients', async (req, res) => {
     }
 
     console.log('Searching for ingredients:', normalizedIngredients, 'matchAll:', matchAll);
+    
+    // Validate database service is available
+    if (!db || typeof db.searchByIngredients !== 'function') {
+      console.error('Database service not available');
+      return res.status(500).json({ 
+        error: 'Database service not available',
+        details: 'Database connection issue'
+      });
+    }
+    
     const recipes = await db.searchByIngredients(normalizedIngredients, matchAll);
     console.log('Found recipes:', recipes.length);
     
@@ -36,11 +67,22 @@ router.post('/by-ingredients', async (req, res) => {
         matchAll,
         count: recipes.length
       },
-      results: recipes
+      results: recipes || []
     });
   } catch (error) {
     console.error('Error searching recipes:', error);
-    res.status(500).json({ error: 'Failed to search recipes' });
+    console.error('Error stack:', error.stack);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    
+    // Make sure we always send a response
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to search recipes',
+        details: error.message || 'Unknown error',
+        type: error.name || 'Error'
+      });
+    }
   }
 });
 
@@ -75,7 +117,9 @@ router.get('/suggestions', async (req, res) => {
 // GET /api/search/debug - Debug endpoint to see all ingredients
 router.get('/debug', async (req, res) => {
   try {
-    const query = `SELECT DISTINCT ingredient FROM Ingredients ORDER BY ingredient`;
+    const query = db.useMariaDB
+      ? `SELECT DISTINCT ingredient FROM Ingredients ORDER BY ingredient`
+      : `SELECT DISTINCT ingredient FROM Ingredients ORDER BY ingredient`;
     const result = await db.query(query);
     const ingredients = result.rows.map(row => row.ingredient);
     
@@ -86,6 +130,47 @@ router.get('/debug', async (req, res) => {
   } catch (error) {
     console.error('Error fetching debug info:', error);
     res.status(500).json({ error: 'Failed to fetch debug info' });
+  }
+});
+
+// GET /api/search/test - Simple test endpoint
+router.get('/test', (req, res) => {
+  res.json({ message: 'Search routes are working!', timestamp: new Date().toISOString() });
+});
+
+// GET /api/search/test-ingredient - Test if a specific ingredient exists
+router.get('/test-ingredient', async (req, res) => {
+  try {
+    const { ingredient } = req.query;
+    
+    if (!ingredient) {
+      return res.status(400).json({ error: 'Ingredient parameter is required' });
+    }
+
+    const normalizedIngredient = ingredient.trim().toLowerCase();
+    
+    // Test exact match (case-insensitive)
+    const exactQuery = db.useMariaDB
+      ? `SELECT * FROM Ingredients WHERE LOWER(TRIM(ingredient)) = ? LIMIT 5`
+      : `SELECT * FROM Ingredients WHERE LOWER(TRIM(ingredient)) = $1 LIMIT 5`;
+    const exactResult = await db.query(exactQuery, [normalizedIngredient]);
+    
+    // Test partial match
+    const partialQuery = db.useMariaDB
+      ? `SELECT * FROM Ingredients WHERE LOWER(TRIM(ingredient)) LIKE ? LIMIT 5`
+      : `SELECT * FROM Ingredients WHERE LOWER(TRIM(ingredient)) LIKE $1 LIMIT 5`;
+    const partialResult = await db.query(partialQuery, [`%${normalizedIngredient}%`]);
+    
+    res.json({
+      searchTerm: normalizedIngredient,
+      exactMatches: exactResult.rows.length,
+      exactResults: exactResult.rows,
+      partialMatches: partialResult.rows.length,
+      partialResults: partialResult.rows
+    });
+  } catch (error) {
+    console.error('Error testing ingredient:', error);
+    res.status(500).json({ error: 'Failed to test ingredient', details: error.message });
   }
 });
 
