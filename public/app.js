@@ -3,6 +3,12 @@ let addedIngredients = [];
 let allRecipes = [];
 let currentPage = 1;
 let totalPages = 1;
+let searchCurrentPage = 1;
+let searchTotalPages = 1;
+let currentSearchQuery = null; // Store current search parameters for pagination
+let quickSearchCurrentPage = 1;
+let quickSearchTotalPages = 1;
+let currentQuickSearchQuery = null; // Store current quick search query for pagination
 
 // DOM Elements
 const ingredientInput = document.getElementById('ingredientInput');
@@ -315,9 +321,12 @@ class RecipeSearchApp {
         this.updateIngredientsDisplay();
         this.updateSearchButtonState();
         resultsSection.style.display = 'none';
+        searchCurrentPage = 1;
+        searchTotalPages = 1;
+        currentSearchQuery = null;
     }
 
-    async searchByIngredients() {
+    async searchByIngredients(page = 1) {
         if (addedIngredients.length === 0) {
             this.showNotification('Please add at least one ingredient', 'error');
             return;
@@ -332,8 +341,17 @@ class RecipeSearchApp {
             const matchAll = matchAllCheckbox.checked;
             const requestBody = {
                 ingredients: addedIngredients,
-                matchAll
+                matchAll,
+                page: page,
+                limit: 50
             };
+            
+            // Store current search query for pagination
+            currentSearchQuery = {
+                ingredients: [...addedIngredients],
+                matchAll: matchAll
+            };
+            searchCurrentPage = page;
             
             console.log('Sending search request:', requestBody);
             
@@ -366,7 +384,14 @@ class RecipeSearchApp {
 
                 const data = await response.json();
                 console.log('Search response received:', data);
-                this.displaySearchResults(data.results, data.query);
+                
+                // Update pagination state
+                if (data.pagination) {
+                    searchTotalPages = data.pagination.totalPages || 1;
+                    searchCurrentPage = data.pagination.page || 1;
+                }
+                
+                this.displaySearchResults(data.results, data.query, data.pagination);
                 resultsSection.style.display = 'block';
                 resultsSection.scrollIntoView({ behavior: 'smooth' });
             } catch (fetchError) {
@@ -394,26 +419,113 @@ class RecipeSearchApp {
         }
     }
 
-    displaySearchResults(recipes, query) {
+    displaySearchResults(recipes, query, pagination = null) {
         const matchTypeText = query.matchAll ? 'containing all' : 'containing any';
         const searchTermText = query.ingredients.length === 1 ? 'ingredient' : 'ingredients';
+        const totalCount = pagination ? pagination.total : recipes.length;
         
         resultsTitle.innerHTML = `
             <i class="fas fa-search"></i> 
-            Found ${recipes.length} recipe${recipes.length !== 1 ? 's' : ''} containing ${matchTypeText} 
+            Found ${totalCount} recipe${totalCount !== 1 ? 's' : ''} containing ${matchTypeText} 
             ${searchTermText}: ${query.ingredients.join(', ')}
+            ${pagination && pagination.totalPages > 1 ? `(Page ${pagination.page} of ${pagination.totalPages})` : ''}
         `;
 
         if (recipes.length === 0) {
+            // Remove results-grid class to allow proper layout
+            searchResults.classList.remove('results-grid');
             searchResults.innerHTML = '<div class="empty-state">No recipes found matching your criteria</div>';
             return;
         }
 
-        searchResults.innerHTML = recipes.map(recipe => this.createRecipeCard(recipe)).join('');
+        // Create pagination controls if needed
+        let paginationHTML = '';
+        if (pagination && pagination.totalPages > 1) {
+            paginationHTML = this.createSearchPaginationControls(pagination);
+        }
+
+        // Remove results-grid class from searchResults to prevent pagination from being a grid item
+        searchResults.classList.remove('results-grid');
+        
+        searchResults.innerHTML = `
+            ${paginationHTML}
+            <div class="results-grid">
+                ${recipes.map(recipe => this.createRecipeCard(recipe)).join('')}
+            </div>
+            ${paginationHTML}
+        `;
         this.bindRecipeCardEvents();
     }
 
-    async quickSearch() {
+    createSearchPaginationControls(pagination) {
+        if (!pagination || pagination.totalPages <= 1) {
+            return '';
+        }
+
+        const { page, totalPages, hasNext, hasPrev } = pagination;
+        let controls = '<div class="pagination-controls">';
+        
+        // Previous button
+        if (hasPrev) {
+            controls += `<button class="pagination-btn" onclick="app.searchByIngredients(${page - 1})">
+                <i class="fas fa-chevron-left"></i> Previous
+            </button>`;
+        } else {
+            controls += `<button class="pagination-btn" disabled>
+                <i class="fas fa-chevron-left"></i> Previous
+            </button>`;
+        }
+
+        // Page numbers
+        controls += '<div class="pagination-pages">';
+        const maxPagesToShow = 5;
+        let startPage = Math.max(1, page - Math.floor(maxPagesToShow / 2));
+        let endPage = Math.min(totalPages, startPage + maxPagesToShow - 1);
+        
+        if (endPage - startPage < maxPagesToShow - 1) {
+            startPage = Math.max(1, endPage - maxPagesToShow + 1);
+        }
+
+        if (startPage > 1) {
+            controls += `<button class="pagination-page" onclick="app.searchByIngredients(1)">1</button>`;
+            if (startPage > 2) {
+                controls += '<span class="pagination-ellipsis">...</span>';
+            }
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            if (i === page) {
+                controls += `<button class="pagination-page active">${i}</button>`;
+            } else {
+                controls += `<button class="pagination-page" onclick="app.searchByIngredients(${i})">${i}</button>`;
+            }
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                controls += '<span class="pagination-ellipsis">...</span>';
+            }
+            controls += `<button class="pagination-page" onclick="app.searchByIngredients(${totalPages})">${totalPages}</button>`;
+        }
+
+        controls += '</div>';
+
+        // Next button
+        if (hasNext) {
+            controls += `<button class="pagination-btn" onclick="app.searchByIngredients(${page + 1})">
+                Next <i class="fas fa-chevron-right"></i>
+            </button>`;
+        } else {
+            controls += `<button class="pagination-btn" disabled>
+                Next <i class="fas fa-chevron-right"></i>
+            </button>`;
+        }
+
+        controls += '</div>';
+        return controls;
+    }
+
+    async quickSearch(page = 1) {
         const query = quickSearchInput.value.trim();
         
         if (!query) {
@@ -421,16 +533,26 @@ class RecipeSearchApp {
             return;
         }
 
+        // Store current quick search query for pagination
+        currentQuickSearchQuery = query;
+        quickSearchCurrentPage = page;
+
         this.showLoading(true);
         
         try {
-            const response = await fetch(`/api/search/recipes?q=${encodeURIComponent(query)}`);
+            const response = await fetch(`/api/search/recipes?q=${encodeURIComponent(query)}&page=${page}&limit=50`);
             if (!response.ok) throw new Error('Search failed');
 
             const data = await response.json();
             
+            // Update pagination state
+            if (data.pagination) {
+                quickSearchTotalPages = data.pagination.totalPages || 1;
+                quickSearchCurrentPage = data.pagination.page || 1;
+            }
+            
             if (data.results && data.results.length > 0) {
-                this.displayQuickSearchresults(data.results, query);
+                this.displayQuickSearchresults(data.results, query, data.pagination);
             } else {
                 // Remove results-grid class to allow proper layout
                 browseResults.classList.remove('results-grid');
@@ -447,19 +569,98 @@ class RecipeSearchApp {
         }
     }
 
-    displayQuickSearchresults(recipes, query) {
+    displayQuickSearchresults(recipes, query, pagination = null) {
         // Hide ingredient search results when showing quick search results
         resultsSection.style.display = 'none';
+        
+        const totalCount = pagination ? pagination.total : recipes.length;
+        
+        // Create pagination controls if needed
+        let paginationHTML = '';
+        if (pagination && pagination.totalPages > 1) {
+            paginationHTML = this.createQuickSearchPaginationControls(pagination, query);
+        }
         
         // Remove results-grid class to allow proper layout
         browseResults.classList.remove('results-grid');
         browseResults.innerHTML = `
-            <h3>Search results for "${query}" (${recipes.length} found):</h3>
+            ${paginationHTML}
+            <h3>Search results for "${query}" (${totalCount} found${pagination && pagination.totalPages > 1 ? `, Page ${pagination.page} of ${pagination.totalPages}` : ''}):</h3>
             <div class="results-grid">
                 ${recipes.map(recipe => this.createRecipeCard(recipe)).join('')}
             </div>
+            ${paginationHTML}
         `;
         this.bindRecipeCardEvents();
+    }
+
+    createQuickSearchPaginationControls(pagination, query) {
+        if (!pagination || pagination.totalPages <= 1) {
+            return '';
+        }
+
+        const { page, totalPages, hasNext, hasPrev } = pagination;
+        const encodedQuery = encodeURIComponent(query);
+        let controls = '<div class="pagination-controls">';
+        
+        // Previous button
+        if (hasPrev) {
+            controls += `<button class="pagination-btn" onclick="app.quickSearch(${page - 1})">
+                <i class="fas fa-chevron-left"></i> Previous
+            </button>`;
+        } else {
+            controls += `<button class="pagination-btn" disabled>
+                <i class="fas fa-chevron-left"></i> Previous
+            </button>`;
+        }
+
+        // Page numbers
+        controls += '<div class="pagination-pages">';
+        const maxPagesToShow = 5;
+        let startPage = Math.max(1, page - Math.floor(maxPagesToShow / 2));
+        let endPage = Math.min(totalPages, startPage + maxPagesToShow - 1);
+        
+        if (endPage - startPage < maxPagesToShow - 1) {
+            startPage = Math.max(1, endPage - maxPagesToShow + 1);
+        }
+
+        if (startPage > 1) {
+            controls += `<button class="pagination-page" onclick="app.quickSearch(1)">1</button>`;
+            if (startPage > 2) {
+                controls += '<span class="pagination-ellipsis">...</span>';
+            }
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            if (i === page) {
+                controls += `<button class="pagination-page active">${i}</button>`;
+            } else {
+                controls += `<button class="pagination-page" onclick="app.quickSearch(${i})">${i}</button>`;
+            }
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                controls += '<span class="pagination-ellipsis">...</span>';
+            }
+            controls += `<button class="pagination-page" onclick="app.quickSearch(${totalPages})">${totalPages}</button>`;
+        }
+
+        controls += '</div>';
+
+        // Next button
+        if (hasNext) {
+            controls += `<button class="pagination-btn" onclick="app.quickSearch(${page + 1})">
+                Next <i class="fas fa-chevron-right"></i>
+            </button>`;
+        } else {
+            controls += `<button class="pagination-btn" disabled>
+                Next <i class="fas fa-chevron-right"></i>
+            </button>`;
+        }
+
+        controls += '</div>';
+        return controls;
     }
 
     clearQuickSearch() {
@@ -470,6 +671,9 @@ class RecipeSearchApp {
     clearQuickSearchResults() {
         browseResults.innerHTML = '';
         browseResults.classList.remove('results-grid');
+        quickSearchCurrentPage = 1;
+        quickSearchTotalPages = 1;
+        currentQuickSearchQuery = null;
     }
 
     setFilterButtonActive(activeButton) {

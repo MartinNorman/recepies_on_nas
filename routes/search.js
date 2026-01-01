@@ -23,7 +23,7 @@ router.post('/by-ingredients', async (req, res) => {
       });
     }
 
-    const { ingredients, matchAll = false } = req.body;
+    const { ingredients, matchAll = false, page = 1, limit = 50 } = req.body;
     
     if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
       return res.status(400).json({ 
@@ -47,7 +47,23 @@ router.post('/by-ingredients', async (req, res) => {
       });
     }
 
-    console.log('Searching for ingredients:', normalizedIngredients, 'matchAll:', matchAll);
+    // Validate pagination parameters
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 50;
+    
+    if (pageNum < 1) {
+      return res.status(400).json({ 
+        error: 'Page must be greater than 0' 
+      });
+    }
+    
+    if (limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({ 
+        error: 'Limit must be between 1 and 100' 
+      });
+    }
+
+    console.log('Searching for ingredients:', normalizedIngredients, 'matchAll:', matchAll, 'page:', pageNum, 'limit:', limitNum);
     
     // Validate database service is available
     if (!db || typeof db.searchByIngredients !== 'function') {
@@ -58,16 +74,17 @@ router.post('/by-ingredients', async (req, res) => {
       });
     }
     
-    const recipes = await db.searchByIngredients(normalizedIngredients, matchAll);
-    console.log('Found recipes:', recipes.length);
+    const searchResult = await db.searchByIngredients(normalizedIngredients, matchAll, pageNum, limitNum);
+    console.log('Found recipes:', searchResult.results.length, 'Total:', searchResult.pagination.total);
     
     res.json({
       query: {
         ingredients: normalizedIngredients,
         matchAll,
-        count: recipes.length
+        count: searchResult.pagination.total
       },
-      results: recipes || []
+      results: searchResult.results || [],
+      pagination: searchResult.pagination
     });
   } catch (error) {
     console.error('Error searching recipes:', error);
@@ -177,22 +194,65 @@ router.get('/test-ingredient', async (req, res) => {
 // GET /api/search/recipes - Quick search recipes by name
 router.get('/recipes', async (req, res) => {
   try {
-    const { q } = req.query;
+    const { q, page = 1, limit = 50 } = req.query;
 
     if (!q || q.trim().length < 2) {
       // Return recent recipes if no search query
       const names = await db.getNames();
-      return res.json(names.slice(0, 10));
+      return res.json({
+        query: '',
+        results: names.slice(0, 10),
+        pagination: {
+          page: 1,
+          limit: 10,
+          total: names.length,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
     }
 
-    // Simple search - get matching recipes first
+    // Validate pagination parameters
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 50;
+    
+    if (pageNum < 1) {
+      return res.status(400).json({ 
+        error: 'Page must be greater than 0' 
+      });
+    }
+    
+    if (limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({ 
+        error: 'Limit must be between 1 and 100' 
+      });
+    }
+
+    const offset = (pageNum - 1) * limitNum;
+    const searchTerm = q.trim();
+
+    // Get total count first
+    const countQuery = db.useMariaDB
+      ? `SELECT COUNT(*) as total FROM Name WHERE LOWER(name) LIKE LOWER(?) OR LOWER(type) LIKE LOWER(?)`
+      : `SELECT COUNT(*) as total FROM Name WHERE LOWER(name) LIKE LOWER($1) OR LOWER(type) LIKE LOWER($1)`;
+
+    const countParams = db.useMariaDB
+      ? [`%${searchTerm}%`, `%${searchTerm}%`]
+      : [`%${searchTerm}%`];
+
+    const countResult = await db.query(countQuery, countParams);
+    const total = parseInt(countResult.rows[0].total) || 0;
+    const totalPages = Math.ceil(total / limitNum);
+
+    // Simple search - get matching recipes with pagination
     const searchQuery = db.useMariaDB
-      ? `SELECT * FROM Name WHERE LOWER(name) LIKE LOWER(?) OR LOWER(type) LIKE LOWER(?) ORDER BY name ASC LIMIT 20;`
-      : `SELECT * FROM Name WHERE LOWER(name) LIKE LOWER($1) OR LOWER(type) LIKE LOWER($1) ORDER BY name ASC LIMIT 20;`;
+      ? `SELECT * FROM Name WHERE LOWER(name) LIKE LOWER(?) OR LOWER(type) LIKE LOWER(?) ORDER BY name ASC LIMIT ? OFFSET ?;`
+      : `SELECT * FROM Name WHERE LOWER(name) LIKE LOWER($1) OR LOWER(type) LIKE LOWER($1) ORDER BY name ASC LIMIT $2 OFFSET $3;`;
 
     const searchParams = db.useMariaDB
-      ? [`%${q.trim()}%`, `%${q.trim()}%`]
-      : [`%${q.trim()}%`];
+      ? [`%${searchTerm}%`, `%${searchTerm}%`, limitNum, offset]
+      : [`%${searchTerm}%`, limitNum, offset];
 
     const result = await db.query(searchQuery, searchParams);
 
@@ -223,8 +283,16 @@ router.get('/recipes', async (req, res) => {
     }
 
     res.json({
-      query: q.trim(),
-      results: recipesWithIngredients
+      query: searchTerm,
+      results: recipesWithIngredients,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1
+      }
     });
   } catch (error) {
     console.error('Error searching recipes by name:', error);

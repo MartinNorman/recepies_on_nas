@@ -782,11 +782,39 @@ body {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     gap: 0;
+    min-width: 700px; /* Minimum width to ensure all 7 days are visible */
+    width: 100%;
+}
+
+.week-grid-container {
+    overflow-x: auto;
+    overflow-y: visible;
+    width: 100%;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+}
+
+.week-grid-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.week-grid-container::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.week-grid-container::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.week-grid-container::-webkit-scrollbar-thumb:hover {
+    background: #555;
 }
 
 .day-column {
     border-right: 1px solid #e9ecef;
     min-height: 200px;
+    min-width: 100px; /* Minimum width for each day column */
 }
 
 .day-column:last-child {

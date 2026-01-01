@@ -255,19 +255,20 @@ class DatabaseService {
     return result.rows;
   }
 
-  async searchByIngredients(ingredientNames, matchAll = false) {
+  async searchByIngredients(ingredientNames, matchAll = false, page = 1, limit = 50) {
     if (!ingredientNames || ingredientNames.length === 0) {
-      return [];
+      return { results: [], pagination: { page: 1, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false } };
     }
 
-    console.log('Database search - ingredients:', ingredientNames, 'matchAll:', matchAll);
+    console.log('Database search - ingredients:', ingredientNames, 'matchAll:', matchAll, 'page:', page, 'limit:', limit);
 
     // Build optimized query - filter ingredients first, then join to recipes
     // This is more efficient than joining all ingredients and then filtering
-    let query, params;
+    let countQuery, query, params;
     
     // Build ingredient filter conditions
     const ingredientPatterns = ingredientNames.map(ing => `%${ing}%`);
+    const offset = (page - 1) * limit;
     
     if (this.useMariaDB) {
       if (matchAll) {
@@ -277,14 +278,20 @@ class DatabaseService {
           `EXISTS (SELECT 1 FROM Ingredients i${idx} WHERE i${idx}.id = n.id AND LOWER(TRIM(i${idx}.ingredient)) LIKE ?)`
         ).join(' AND ');
         
+        countQuery = `
+          SELECT COUNT(DISTINCT n.id) as total
+          FROM Name n
+          WHERE ${ingredientFilters}
+        `;
+        
         query = `
           SELECT n.*, ${ingredientNames.length} as matched_ingredients
           FROM Name n
           WHERE ${ingredientFilters}
           ORDER BY n.name ASC
-          LIMIT 50;
+          LIMIT ? OFFSET ?;
         `;
-        params = ingredientPatterns;
+        params = [...ingredientPatterns, limit, offset];
       } else {
         // For matchAny: recipe must have ANY ingredient
         // Use simpler EXISTS with OR
@@ -292,14 +299,20 @@ class DatabaseService {
           `EXISTS (SELECT 1 FROM Ingredients i WHERE i.id = n.id AND LOWER(TRIM(i.ingredient)) LIKE ?)`
         ).join(' OR ');
         
+        countQuery = `
+          SELECT COUNT(DISTINCT n.id) as total
+          FROM Name n
+          WHERE ${ingredientFilters}
+        `;
+        
         query = `
           SELECT DISTINCT n.*, 1 as matched_ingredients
           FROM Name n
           WHERE ${ingredientFilters}
           ORDER BY n.name ASC
-          LIMIT 50;
+          LIMIT ? OFFSET ?;
         `;
-        params = ingredientPatterns;
+        params = [...ingredientPatterns, limit, offset];
       }
     } else {
       if (matchAll) {
@@ -308,36 +321,55 @@ class DatabaseService {
           `EXISTS (SELECT 1 FROM Ingredients i${idx} WHERE i${idx}.id = n.id AND LOWER(TRIM(i${idx}.ingredient)) LIKE LOWER($${idx + 1}))`
         ).join(' AND ');
         
+        countQuery = `
+          SELECT COUNT(DISTINCT n.id) as total
+          FROM Name n
+          WHERE ${ingredientFilters}
+        `;
+        
         query = `
           SELECT n.*, $${ingredientNames.length + 1}::int as matched_ingredients
           FROM Name n
           WHERE ${ingredientFilters}
           ORDER BY n.name ASC
-          LIMIT 50;
+          LIMIT $${ingredientNames.length + 2} OFFSET $${ingredientNames.length + 3};
         `;
-        params = [...ingredientPatterns, ingredientNames.length];
+        params = [...ingredientPatterns, ingredientNames.length, limit, offset];
       } else {
         // PostgreSQL version for matchAny
         const ingredientFilters = ingredientNames.map((_, idx) => 
           `EXISTS (SELECT 1 FROM Ingredients i WHERE i.id = n.id AND LOWER(TRIM(i.ingredient)) LIKE LOWER($${idx + 1}))`
         ).join(' OR ');
         
+        countQuery = `
+          SELECT COUNT(DISTINCT n.id) as total
+          FROM Name n
+          WHERE ${ingredientFilters}
+        `;
+        
         query = `
           SELECT DISTINCT n.*, 1 as matched_ingredients
           FROM Name n
           WHERE ${ingredientFilters}
           ORDER BY n.name ASC
-          LIMIT 50;
+          LIMIT $${ingredientNames.length + 1} OFFSET $${ingredientNames.length + 2};
         `;
-        params = ingredientPatterns;
+        params = [...ingredientPatterns, limit, offset];
       }
     }
 
+    console.log('Executing count query:', countQuery);
     console.log('Executing query:', query);
     console.log('With params:', params);
     console.log('Searching for normalized ingredients:', ingredientNames);
 
     try {
+      // First get total count
+      const countParams = this.useMariaDB ? ingredientPatterns : ingredientPatterns;
+      const countResult = await this.query(countQuery, countParams);
+      const total = parseInt(countResult.rows[0].total) || 0;
+      const totalPages = Math.ceil(total / limit);
+      
       // Add query timeout - execute with a timeout promise (reduced to 15 seconds)
       const queryPromise = this.query(query, params);
       const timeoutPromise = new Promise((_, reject) => 
@@ -346,13 +378,10 @@ class DatabaseService {
       
       const result = await Promise.race([queryPromise, timeoutPromise]);
       console.log('Query result:', result.rows.length, 'rows');
-      
-      // Limit results to prevent too many follow-up queries
-      const limitedResults = result.rows.slice(0, 50);
-      console.log('Processing', limitedResults.length, 'recipes (limited to 50)');
+      console.log('Total results:', total, 'Total pages:', totalPages);
       
       // Debug: If no results, let's check what ingredients actually exist
-      if (result.rows.length === 0) {
+      if (result.rows.length === 0 && page === 1) {
         console.log('No results found. Checking sample ingredients in database...');
         const sampleQuery = this.useMariaDB
           ? `SELECT DISTINCT ingredient FROM Ingredients LIMIT 20`
@@ -362,8 +391,8 @@ class DatabaseService {
       }
 
       // Optimize: Get all ingredients for all recipes in one query instead of N+1
-      if (limitedResults.length > 0) {
-        const recipeIds = limitedResults.map(r => r.id);
+      if (result.rows.length > 0) {
+        const recipeIds = result.rows.map(r => r.id);
         
         // Get all ingredients for all recipes at once
         let allIngredientsQuery;
@@ -422,17 +451,37 @@ class DatabaseService {
         });
         
         // Attach data to recipes
-        const recipesWithIngredients = limitedResults.map(recipe => {
+        const recipesWithIngredients = result.rows.map(recipe => {
           recipe.ingredients = ingredientsByRecipe[recipe.id] || [];
           recipe.cooking_time = cookingTimesByRecipe[recipe.id] || null;
           recipe.rating = ratingsByRecipe[recipe.id] || null;
           return recipe;
         });
         
-        return recipesWithIngredients;
+        return {
+          results: recipesWithIngredients,
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
+        };
       }
       
-      return [];
+      return {
+        results: [],
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNext: false,
+          hasPrev: false
+        }
+      };
     } catch (error) {
       console.error('Database query error:', error);
       throw error;
