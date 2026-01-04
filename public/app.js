@@ -34,6 +34,10 @@ const notification = document.getElementById('notification');
 
 class RecipeSearchApp {
     constructor() {
+        this.suggestionDebounceTimer = null;
+        this.recipeCache = new Map();
+        this.cacheTimestamp = null;
+        this.CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
         this.init();
     }
 
@@ -44,8 +48,17 @@ class RecipeSearchApp {
     }
 
     bindEvents() {
-        // Ingredient input events
-        ingredientInput.addEventListener('input', this.handleIngredientInput.bind(this));
+        // Ingredient input events with debouncing to reduce API calls
+        ingredientInput.addEventListener('input', (e) => {
+            // Clear existing timer
+            if (this.suggestionDebounceTimer) {
+                clearTimeout(this.suggestionDebounceTimer);
+            }
+            // Wait 300ms after user stops typing before fetching suggestions
+            this.suggestionDebounceTimer = setTimeout(() => {
+                this.handleIngredientInput(e);
+            }, 300);
+        });
         ingredientInput.addEventListener('keypress', this.handleIngredientKeypress.bind(this));
         addIngredientBtn.addEventListener('click', this.addIngredient.bind(this));
         
@@ -115,24 +128,92 @@ class RecipeSearchApp {
         }
     }
 
-    async fetchAllRecipes() {
+    async fetchAllRecipes(forceRefresh = false) {
         try {
-            // Fetch all recipes (we'll get the first page, but for type filters we need all)
-            // For now, fetch without pagination to get all recipes for type filtering
-            const response = await fetch('/api/tables/names?page=1&limit=1000');
-        if (!response.ok) throw new Error('Failed to fetch recipes');
+            // Check cache first
+            const cacheKey = 'all-recipes';
+            const cached = this.recipeCache.get(cacheKey);
+            
+            if (!forceRefresh && cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+                console.log('Using cached recipes');
+                allRecipes = cached.data;
+                return;
+            }
+            
+            // Optimized: Fetch in smaller batches initially, then load more if needed
+            // Start with first 100 recipes for faster initial load
+            const response = await fetch('/api/tables/names?page=1&limit=100');
+            if (!response.ok) throw new Error('Failed to fetch recipes');
             const data = await response.json();
             
             // Handle both old format (array) and new format (object with recipes property)
+            let recipes;
             if (Array.isArray(data)) {
-                allRecipes = data;
+                recipes = data;
             } else {
-                allRecipes = data.recipes || [];
+                recipes = data.recipes || [];
             }
+            
+            // If we have pagination info and there are more recipes, fetch them in background
+            if (data.pagination && data.pagination.total > 100) {
+                allRecipes = recipes; // Set initial recipes immediately
+                
+                // Fetch remaining recipes in background (for type filtering)
+                this.fetchRemainingRecipes(data.pagination.total, 100).then(remainingRecipes => {
+                    allRecipes = [...recipes, ...remainingRecipes];
+                    // Update cache with complete dataset
+                    this.recipeCache.set(cacheKey, {
+                        data: allRecipes,
+                        timestamp: Date.now()
+                    });
+                    // Update type filter buttons with complete data
+                    this.createTypeFilterButtons();
+                }).catch(error => {
+                    console.error('Error fetching remaining recipes:', error);
+                    // Keep the initial 100 recipes
+                });
+            } else {
+                allRecipes = recipes;
+            }
+            
+            // Update cache
+            this.recipeCache.set(cacheKey, {
+                data: allRecipes,
+                timestamp: Date.now()
+            });
         } catch (error) {
             console.error('Error fetching all recipes:', error);
             allRecipes = [];
         }
+    }
+
+    async fetchRemainingRecipes(total, alreadyFetched) {
+        const remaining = total - alreadyFetched;
+        if (remaining <= 0) return [];
+        
+        const pages = Math.ceil(remaining / 100);
+        const allRecipes = [];
+        
+        // Fetch remaining pages in parallel (limit to 5 concurrent requests)
+        const fetchPromises = [];
+        for (let page = 2; page <= Math.min(pages + 1, 6); page++) { // Max 5 additional pages
+            fetchPromises.push(
+                fetch(`/api/tables/names?page=${page}&limit=100`)
+                    .then(res => res.json())
+                    .then(data => Array.isArray(data) ? data : (data.recipes || []))
+                    .catch(err => {
+                        console.error(`Error fetching page ${page}:`, err);
+                        return [];
+                    })
+            );
+        }
+        
+        const results = await Promise.all(fetchPromises);
+        results.forEach(recipes => {
+            allRecipes.push(...recipes);
+        });
+        
+        return allRecipes;
     }
 
     getAvailableTypes() {
@@ -1667,8 +1748,8 @@ class RecipeSearchApp {
                 this.showNotification(isUpdate ? 'Recipe updated successfully!' : 'Recipe created successfully!', 'success');
             }, 100);
             
-            // Refresh recipe list
-            await this.fetchAllRecipes();
+            // Refresh recipe list (force refresh to get latest data)
+            await this.fetchAllRecipes(true);
             this.createTypeFilterButtons();
         } catch (error) {
             console.error('Error saving recipe:', error);
@@ -1731,8 +1812,8 @@ class RecipeSearchApp {
                 this.showNotification('Recipe deleted successfully!', 'success');
             }, 100);
             
-            // Refresh recipe list
-            await this.fetchAllRecipes();
+            // Refresh recipe list (force refresh to get latest data)
+            await this.fetchAllRecipes(true);
             this.createTypeFilterButtons();
             
             // If we were viewing this recipe, close the detail modal

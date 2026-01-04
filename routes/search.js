@@ -256,30 +256,76 @@ router.get('/recipes', async (req, res) => {
 
     const result = await db.query(searchQuery, searchParams);
 
-    // Fetch ingredients, cooking time, and rating for each recipe
+    // Optimize: Fetch ingredients, cooking times, and ratings for all recipes in batch queries
+    // This eliminates the N+1 query problem
     const recipesWithIngredients = [];
-    for (const recipe of result.rows) {
-      const ingredientsQuery = db.useMariaDB
-        ? `SELECT * FROM Ingredients WHERE id = ? ORDER BY id;`
-        : `SELECT * FROM Ingredients WHERE id = $1 ORDER BY id;`;
-      const ingredientsResult = await db.query(ingredientsQuery, [recipe.id]);
-      recipe.ingredients = ingredientsResult.rows;
+    
+    if (result.rows.length > 0) {
+      const recipeIds = result.rows.map(r => r.id);
       
-      // Get cooking time
-      const cookingTimeQuery = db.useMariaDB
-        ? `SELECT * FROM CookingTimes WHERE id = ?`
-        : `SELECT * FROM CookingTimes WHERE id = $1`;
-      const cookingTimeResult = await db.query(cookingTimeQuery, [recipe.id]);
-      recipe.cooking_time = cookingTimeResult.rows[0] || null;
+      // Get all ingredients for all recipes at once
+      let allIngredientsQuery;
+      if (db.useMariaDB) {
+        const placeholders = recipeIds.map(() => '?').join(',');
+        allIngredientsQuery = `SELECT * FROM Ingredients WHERE id IN (${placeholders}) ORDER BY id`;
+      } else {
+        allIngredientsQuery = `SELECT * FROM Ingredients WHERE id = ANY($1::int[]) ORDER BY id`;
+      }
+      const allIngredientsResult = await db.query(
+        allIngredientsQuery, 
+        db.useMariaDB ? recipeIds : [recipeIds]
+      );
       
-      // Get rating
-      const ratingQuery = db.useMariaDB
-        ? `SELECT * FROM Ratings WHERE id = ?`
-        : `SELECT * FROM Ratings WHERE id = $1`;
-      const ratingResult = await db.query(ratingQuery, [recipe.id]);
-      recipe.rating = ratingResult.rows[0] || null;
+      // Group ingredients by recipe ID
+      const ingredientsByRecipe = {};
+      allIngredientsResult.rows.forEach(ing => {
+        if (!ingredientsByRecipe[ing.id]) {
+          ingredientsByRecipe[ing.id] = [];
+        }
+        ingredientsByRecipe[ing.id].push(ing);
+      });
       
-      recipesWithIngredients.push(recipe);
+      // Get all cooking times at once
+      let allCookingTimesQuery;
+      if (db.useMariaDB) {
+        const placeholders = recipeIds.map(() => '?').join(',');
+        allCookingTimesQuery = `SELECT * FROM CookingTimes WHERE id IN (${placeholders})`;
+      } else {
+        allCookingTimesQuery = `SELECT * FROM CookingTimes WHERE id = ANY($1::int[])`;
+      }
+      const allCookingTimesResult = await db.query(
+        allCookingTimesQuery,
+        db.useMariaDB ? recipeIds : [recipeIds]
+      );
+      const cookingTimesByRecipe = {};
+      allCookingTimesResult.rows.forEach(ct => {
+        cookingTimesByRecipe[ct.id] = ct;
+      });
+      
+      // Get all ratings at once
+      let allRatingsQuery;
+      if (db.useMariaDB) {
+        const placeholders = recipeIds.map(() => '?').join(',');
+        allRatingsQuery = `SELECT * FROM Ratings WHERE id IN (${placeholders})`;
+      } else {
+        allRatingsQuery = `SELECT * FROM Ratings WHERE id = ANY($1::int[])`;
+      }
+      const allRatingsResult = await db.query(
+        allRatingsQuery,
+        db.useMariaDB ? recipeIds : [recipeIds]
+      );
+      const ratingsByRecipe = {};
+      allRatingsResult.rows.forEach(rating => {
+        ratingsByRecipe[rating.id] = rating;
+      });
+      
+      // Attach data to recipes
+      result.rows.forEach(recipe => {
+        recipe.ingredients = ingredientsByRecipe[recipe.id] || [];
+        recipe.cooking_time = cookingTimesByRecipe[recipe.id] || null;
+        recipe.rating = ratingsByRecipe[recipe.id] || null;
+        recipesWithIngredients.push(recipe);
+      });
     }
 
     res.json({

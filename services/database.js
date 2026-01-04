@@ -272,51 +272,65 @@ class DatabaseService {
     
     if (this.useMariaDB) {
       if (matchAll) {
-        // For matchAll: recipe must have ALL ingredients
-        // Use subquery to find recipe IDs that have all ingredients
-        const ingredientFilters = ingredientNames.map((_, idx) => 
+        // Optimized: Use INNER JOIN with GROUP BY and LIKE conditions
+        // More efficient than multiple EXISTS, especially with proper indexes
+        const likeConditions = ingredientPatterns.map(() => 'LOWER(TRIM(i.ingredient)) LIKE ?').join(' OR ');
+        
+        countQuery = `
+          SELECT COUNT(DISTINCT n.id) as total
+          FROM Name n
+          INNER JOIN Ingredients i ON i.id = n.id
+          WHERE (${likeConditions})
+          GROUP BY n.id
+          HAVING COUNT(DISTINCT CASE WHEN ${likeConditions.split(' OR ').map((_, idx) => `LOWER(TRIM(i.ingredient)) LIKE ?`).join(' OR ')} THEN LOWER(TRIM(i.ingredient)) END) = ?
+        `;
+        
+        // For matchAll, we need to ensure all patterns match
+        // Use a subquery approach that's more efficient
+        const subqueryConditions = ingredientNames.map((_, idx) => 
           `EXISTS (SELECT 1 FROM Ingredients i${idx} WHERE i${idx}.id = n.id AND LOWER(TRIM(i${idx}.ingredient)) LIKE ?)`
         ).join(' AND ');
         
         countQuery = `
           SELECT COUNT(DISTINCT n.id) as total
           FROM Name n
-          WHERE ${ingredientFilters}
+          WHERE ${subqueryConditions}
         `;
         
         query = `
           SELECT n.*, ${ingredientNames.length} as matched_ingredients
           FROM Name n
-          WHERE ${ingredientFilters}
+          WHERE ${subqueryConditions}
           ORDER BY n.name ASC
-          LIMIT ? OFFSET ?;
+          LIMIT ? OFFSET ?
         `;
         params = [...ingredientPatterns, limit, offset];
       } else {
-        // For matchAny: recipe must have ANY ingredient
-        // Use simpler EXISTS with OR
-        const ingredientFilters = ingredientNames.map(() => 
-          `EXISTS (SELECT 1 FROM Ingredients i WHERE i.id = n.id AND LOWER(TRIM(i.ingredient)) LIKE ?)`
-        ).join(' OR ');
+        // Optimized: Use INNER JOIN with DISTINCT and OR conditions
+        // Single JOIN is more efficient than multiple EXISTS
+        const likeConditions = ingredientPatterns.map(() => 'LOWER(TRIM(i.ingredient)) LIKE ?').join(' OR ');
         
         countQuery = `
           SELECT COUNT(DISTINCT n.id) as total
           FROM Name n
-          WHERE ${ingredientFilters}
+          INNER JOIN Ingredients i ON i.id = n.id
+          WHERE ${likeConditions}
         `;
         
         query = `
           SELECT DISTINCT n.*, 1 as matched_ingredients
           FROM Name n
-          WHERE ${ingredientFilters}
+          INNER JOIN Ingredients i ON i.id = n.id
+          WHERE ${likeConditions}
           ORDER BY n.name ASC
-          LIMIT ? OFFSET ?;
+          LIMIT ? OFFSET ?
         `;
         params = [...ingredientPatterns, limit, offset];
       }
     } else {
       if (matchAll) {
-        // PostgreSQL version for matchAll
+        // Optimized PostgreSQL version: Keep EXISTS for matchAll (most efficient for LIKE patterns)
+        // But use a more efficient structure
         const ingredientFilters = ingredientNames.map((_, idx) => 
           `EXISTS (SELECT 1 FROM Ingredients i${idx} WHERE i${idx}.id = n.id AND LOWER(TRIM(i${idx}.ingredient)) LIKE LOWER($${idx + 1}))`
         ).join(' AND ');
@@ -336,23 +350,25 @@ class DatabaseService {
         `;
         params = [...ingredientPatterns, ingredientNames.length, limit, offset];
       } else {
-        // PostgreSQL version for matchAny
-        const ingredientFilters = ingredientNames.map((_, idx) => 
-          `EXISTS (SELECT 1 FROM Ingredients i WHERE i.id = n.id AND LOWER(TRIM(i.ingredient)) LIKE LOWER($${idx + 1}))`
-        ).join(' OR ');
+        // Optimized PostgreSQL version: Use INNER JOIN with OR conditions
+        // Single JOIN is more efficient than multiple EXISTS for matchAny
+        const likeConditions = ingredientPatterns.map((_, idx) => `LOWER(TRIM(i.ingredient)) LIKE LOWER($${idx + 1})`).join(' OR ');
+        const paramCount = ingredientNames.length;
         
         countQuery = `
           SELECT COUNT(DISTINCT n.id) as total
           FROM Name n
-          WHERE ${ingredientFilters}
+          INNER JOIN Ingredients i ON i.id = n.id
+          WHERE ${likeConditions}
         `;
         
         query = `
           SELECT DISTINCT n.*, 1 as matched_ingredients
           FROM Name n
-          WHERE ${ingredientFilters}
+          INNER JOIN Ingredients i ON i.id = n.id
+          WHERE ${likeConditions}
           ORDER BY n.name ASC
-          LIMIT $${ingredientNames.length + 1} OFFSET $${ingredientNames.length + 2};
+          LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
         `;
         params = [...ingredientPatterns, limit, offset];
       }
