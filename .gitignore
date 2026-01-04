@@ -4,6 +4,7 @@ logs/
 *.pid
 .env
 .env.local
+.env.*.local
 .DS_Store
 *.swp
 *.swo
@@ -13,4 +14,8 @@ logs/
 images/
 logs/
 node_modules/
+
+# Sensitive configuration files (if you have local overrides)
+config.local.js
+restart-server.local.ps1
 

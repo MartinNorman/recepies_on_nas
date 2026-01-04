@@ -13,7 +13,7 @@ module.exports = {
     port: parseInt(cleanEnv(process.env.DB_PORT, process.env.DB_TYPE === 'mariadb' || process.env.DB_TYPE === 'mysql' ? '3306' : '5432'), 10),
     database: cleanEnv(process.env.DB_NAME, 'recepie_db'),
     user: cleanEnv(process.env.DB_USER, process.env.DB_TYPE === 'mariadb' || process.env.DB_TYPE === 'mysql' ? 'root' : 'postgres'),
-    password: cleanEnv(process.env.DB_PASSWORD, 'MNOmno001'),
+    password: cleanEnv(process.env.DB_PASSWORD, ''), // REQUIRED: Set DB_PASSWORD in .env file
   },
   server: {
     port: parseInt(cleanEnv(process.env.PORT, '3000'), 10),
