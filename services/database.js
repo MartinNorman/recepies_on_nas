@@ -942,10 +942,15 @@ class DatabaseService {
           const ingredientQuery = this.useMariaDB
             ? `INSERT INTO Ingredients (id, amount, amount_type, ingredient) VALUES (?, ?, ?, ?)`
             : `INSERT INTO Ingredients (id, amount, amount_type, ingredient) VALUES ($1, $2, $3, $4)`;
+          // Use empty string instead of null for amount_type to avoid database constraint errors
+          // Handle null, undefined, or empty values explicitly
+          const amountType = (ingredient.amount_type != null && ingredient.amount_type !== '') 
+            ? ingredient.amount_type 
+            : '';
           await this.query(ingredientQuery, [
             recipeId,
             ingredient.amount || null,
-            ingredient.amount_type || null,
+            amountType,
             ingredient.ingredient
           ]);
         }
@@ -1020,12 +1025,42 @@ class DatabaseService {
     const { name, type, ingredients, instructions, cooking_time, rating } = recipeData;
     // Description is optional and may not be in the database schema
     
+    // Get a connection for transaction handling
+    let connection;
     try {
+      if (this.useMariaDB) {
+        connection = await this.pool.getConnection();
+        await connection.beginTransaction();
+      } else {
+        connection = await this.pool.connect();
+        await connection.query('BEGIN');
+      }
+
+      // Helper function to execute queries within transaction
+      const executeQuery = async (text, params) => {
+        if (this.useMariaDB) {
+          const { text: convertedText, params: convertedParams } = this.convertParams(text, params);
+          const result = await connection.execute(convertedText, convertedParams || []);
+          // Return in PostgreSQL-like format for compatibility
+          if (Array.isArray(result) && result.length >= 2) {
+            const rows = result[0];
+            const fields = result[1];
+            if (rows && typeof rows === 'object' && 'insertId' in rows && 'affectedRows' in rows && !Array.isArray(rows)) {
+              return { rows: [], fields, rowCount: rows.affectedRows };
+            }
+            return { rows: Array.isArray(rows) ? rows : [], fields, rowCount: Array.isArray(rows) ? rows.length : 0 };
+          }
+          return { rows: [], fields: null, rowCount: 0 };
+        } else {
+          return await connection.query(text, params);
+        }
+      };
+
       // Update Name table
       const nameQuery = this.useMariaDB
         ? `UPDATE Name SET name = ?, type = ? WHERE id = ?`
         : `UPDATE Name SET name = $1, type = $2 WHERE id = $3`;
-      await this.query(nameQuery, [name, type || null, recipeId]);
+      await executeQuery(nameQuery, [name, type || null, recipeId]);
 
       // Delete existing related data
       const deleteQueries = [
@@ -1039,7 +1074,7 @@ class DatabaseService {
         const deleteQuery = this.useMariaDB
           ? `DELETE FROM ${table} WHERE id = ?`
           : `DELETE FROM ${table} WHERE id = $1`;
-        await this.query(deleteQuery, [param]);
+        await executeQuery(deleteQuery, [param]);
       }
 
       // Re-insert ingredients - using id instead of recipe_id
@@ -1048,10 +1083,15 @@ class DatabaseService {
           const ingredientQuery = this.useMariaDB
             ? `INSERT INTO Ingredients (id, amount, amount_type, ingredient) VALUES (?, ?, ?, ?)`
             : `INSERT INTO Ingredients (id, amount, amount_type, ingredient) VALUES ($1, $2, $3, $4)`;
-          await this.query(ingredientQuery, [
+          // Use empty string instead of null for amount_type to avoid database constraint errors
+          // Handle null, undefined, or empty values explicitly
+          const amountType = (ingredient.amount_type != null && ingredient.amount_type !== '') 
+            ? ingredient.amount_type 
+            : '';
+          await executeQuery(ingredientQuery, [
             recipeId,
             ingredient.amount || null,
-            ingredient.amount_type || null,
+            amountType,
             ingredient.ingredient
           ]);
         }
@@ -1063,7 +1103,7 @@ class DatabaseService {
           const instructionQuery = this.useMariaDB
             ? `INSERT INTO Instructions (id, step, instruction) VALUES (?, ?, ?)`
             : `INSERT INTO Instructions (id, step, instruction) VALUES ($1, $2, $3)`;
-          await this.query(instructionQuery, [
+          await executeQuery(instructionQuery, [
             recipeId,
             instruction.step,
             instruction.instruction
@@ -1076,7 +1116,7 @@ class DatabaseService {
         const cookingTimeQuery = this.useMariaDB
           ? `INSERT INTO CookingTimes (id, time, timeunit) VALUES (?, ?, ?)`
           : `INSERT INTO CookingTimes (id, time, timeunit) VALUES ($1, $2, $3)`;
-        await this.query(cookingTimeQuery, [
+        await executeQuery(cookingTimeQuery, [
           recipeId,
           cooking_time.time,
           cooking_time.timeunit
@@ -1088,14 +1128,42 @@ class DatabaseService {
         const ratingQuery = this.useMariaDB
           ? `INSERT INTO Ratings (id, rating) VALUES (?, ?)`
           : `INSERT INTO Ratings (id, rating) VALUES ($1, $2)`;
-        await this.query(ratingQuery, [recipeId, rating.rating]);
+        await executeQuery(ratingQuery, [recipeId, rating.rating]);
+      }
+
+      // Commit transaction
+      if (this.useMariaDB) {
+        await connection.commit();
+      } else {
+        await connection.query('COMMIT');
       }
 
       // Return the updated recipe
       return await this.getRecipeById(recipeId);
     } catch (error) {
+      // Rollback transaction on error to prevent data loss
+      if (connection) {
+        try {
+          if (this.useMariaDB) {
+            await connection.rollback();
+          } else {
+            await connection.query('ROLLBACK');
+          }
+        } catch (rollbackError) {
+          console.error('Error rolling back transaction:', rollbackError);
+        }
+      }
       console.error('Error updating recipe:', error);
       throw error;
+    } finally {
+      // Release connection
+      if (connection) {
+        if (this.useMariaDB) {
+          connection.release();
+        } else {
+          connection.release();
+        }
+      }
     }
   }
 
